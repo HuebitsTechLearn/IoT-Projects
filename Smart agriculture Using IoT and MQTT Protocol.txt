@@ -1,0 +1,107 @@
+graphql
+CopyEdit
+smart_agriculture/
+│
+├── sensor_readings.py         # Main Python script
+├── twilio_alert.py            # SMS alert function
+├── config.py                  # Config for API keys and thresholds
+├── requirements.txt           # Dependencies
+
+config.py
+python
+CopyEdit
+# config.py
+
+# ThingSpeak MQTT Config
+THINGSPEAK_CHANNEL_ID = 'YOUR_CHANNEL_ID'
+THINGSPEAK_MQTT_API_KEY = 'YOUR_MQTT_WRITE_API_KEY'
+THINGSPEAK_MQTT_HOST = 'mqtt3.thingspeak.com'
+THINGSPEAK_MQTT_PORT = 1883
+
+# Twilio Config
+TWILIO_SID = 'YOUR_TWILIO_SID'
+TWILIO_AUTH_TOKEN = 'YOUR_TWILIO_AUTH_TOKEN'
+TWILIO_FROM = '+1234567890'
+TWILIO_TO = '+0987654321'
+
+# Thresholds
+TEMP_THRESHOLD = 35
+MOISTURE_THRESHOLD = 300  # Adjust as per your sensor
+
+twilio_alert.py
+python
+CopyEdit
+# twilio_alert.py
+from twilio.rest import Client
+from config import TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, TWILIO_TO
+
+def send_alert(message):
+    client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
+    client.messages.create(
+        to=TWILIO_TO,
+        from_=TWILIO_FROM,
+        body=message
+    )
+
+sensor_readings.py
+python
+CopyEdit
+# sensor_readings.py
+import time
+import Adafruit_DHT
+import paho.mqtt.client as mqtt
+from twilio_alert import send_alert
+from config import *
+
+import RPi.GPIO as GPIO
+
+# Setup
+GPIO.setmode(GPIO.BCM)
+DHT_SENSOR = Adafruit_DHT.DHT11
+DHT_PIN = 4
+SOIL_MOISTURE_PIN = 17
+GPIO.setup(SOIL_MOISTURE_PIN, GPIO.IN)
+
+# MQTT Topic
+topic = f"channels/{THINGSPEAK_CHANNEL_ID}/publish/{THINGSPEAK_MQTT_API_KEY}"
+
+def get_soil_moisture():
+    return GPIO.input(SOIL_MOISTURE_PIN)
+
+def main():
+    client = mqtt.Client()
+    client.connect(THINGSPEAK_MQTT_HOST, THINGSPEAK_MQTT_PORT, 60)
+
+    while True:
+        humidity, temperature = Adafruit_DHT.read(DHT_SENSOR, DHT_PIN)
+        moisture_level = get_soil_moisture()
+
+        if humidity and temperature:
+            print(f"Temp: {temperature:.1f}C  Humidity: {humidity:.1f}%  Moisture: {moisture_level}")
+            
+            # Prepare payload for ThingSpeak
+            payload = f"field1={temperature}&field2={humidity}&field3={moisture_level}"
+            client.publish(topic, payload)
+
+            # Send SMS alert on breach
+            if temperature > TEMP_THRESHOLD:
+                send_alert(f" ALERT: Temperature too high: {temperature}°C")
+
+            if moisture_level == 1:  # Assuming 1 is DRY
+                send_alert(" ALERT: Soil moisture is low!")
+
+        else:
+            print("Failed to retrieve sensor data")
+
+        time.sleep(15)
+
+if __name__ == "__main__":
+    main()
+
+requirements.txt
+nginx
+CopyEdit
+Adafruit_DHT
+paho-mqtt
+twilio
+RPi.GPIO
