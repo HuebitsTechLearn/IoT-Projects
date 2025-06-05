@@ -1,0 +1,131 @@
+cpp
+CopyEdit
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <PZEM004Tv30.h>
+#include <HardwareSerial.h>
+
+// WiFi Credentials
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// ThingSpeak Settings
+const char* thingSpeakApiKey = "YOUR_THINGSPEAK_WRITE_API_KEY";
+const char* thingSpeakServer = "http://api.thingspeak.com/update";
+
+// PZEM-004T connected to Serial2
+HardwareSerial PzemSerial(2);  // Use UART2: GPIO16 (RX2), GPIO17 (TX2)
+PZEM004Tv30 pzem(&PzemSerial);
+
+// GSM module on UART1
+HardwareSerial gsmSerial(1);   // GPIO4 (RX1), GPIO2 (TX1)
+
+// Phone number for SMS alerts
+const char* phoneNumber = "+1234567890";
+
+float voltage = 0.0;
+float current = 0.0;
+float power = 0.0;
+float energy = 0.0;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize PZEM serial (baud 9600)
+  PzemSerial.begin(9600, SERIAL_8N1, 16, 17);
+  
+  // Initialize GSM serial
+  gsmSerial.begin(9600, SERIAL_8N1, 4, 2);
+
+  connectWiFi();
+
+  Serial.println("System Initialized");
+}
+
+void loop() {
+  readPZEM();
+  sendToThingSpeak();
+  checkForFaults();
+  delay(15000);  // Send every 15 seconds
+}
+
+void connectWiFi() {
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("Connected.");
+}
+
+void readPZEM() {
+  voltage = pzem.voltage();
+  current = pzem.current();
+  power = pzem.power();
+  energy = pzem.energy();
+
+  Serial.printf("Voltage: %.2f V\nCurrent: %.2f A\nPower: %.2f W\nEnergy: %.2f Wh\n",
+                voltage, current, power, energy);
+}
+
+void sendToThingSpeak() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String(thingSpeakServer) + "?api_key=" + thingSpeakApiKey +
+                 "&field1=" + String(voltage) +
+                 "&field2=" + String(current) +
+                 "&field3=" + String(power) +
+                 "&field4=" + String(energy);
+
+    http.begin(url);
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode > 0) {
+      Serial.printf("ThingSpeak update successful: %d\n", httpResponseCode);
+    } else {
+      Serial.printf("ThingSpeak update failed: %d\n", httpResponseCode);
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi disconnected. Trying to reconnect...");
+    connectWiFi();
+  }
+}
+
+void checkForFaults() {
+  // Define fault thresholds — tweak these based on your feeder specs
+  const float voltageThresholdLow = 200.0;   // Example undervoltage limit
+  const float voltageThresholdHigh = 250.0;  // Example overvoltage limit
+  const float currentThreshold = 30.0;       // Overcurrent limit in Amps
+
+  if (voltage < voltageThresholdLow || voltage > voltageThresholdHigh || current > currentThreshold) {
+    Serial.println("Fault detected! Sending SMS alert...");
+    sendSMSAlert();
+  }
+}
+
+void sendSMSAlert() {
+  gsmSerial.println("AT");
+  delay(500);
+  gsmSerial.println("AT+CMGF=1");  // Set SMS to text mode
+  delay(500);
+  gsmSerial.print("AT+CMGS=\"");
+  gsmSerial.print(phoneNumber);
+  gsmSerial.println("\"");
+  delay(500);
+
+  String alertMessage = "Alert! Fault detected on feeder.\n";
+  alertMessage += "Voltage: " + String(voltage) + " V\n";
+  alertMessage += "Current: " + String(current) + " A\n";
+  alertMessage += "Power: " + String(power) + " W";
+
+  gsmSerial.print(alertMessage);
+  delay(500);
+  gsmSerial.write(26);  // Ctrl+Z to send SMS
+  delay(5000);
+
+  Serial.println("SMS alert sent.");
+}
