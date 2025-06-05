@@ -1,0 +1,83 @@
+cpp
+CopyEdit
+#include <Wire.h>
+#include <MPU6050_light.h>
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+
+#define BUZZER_PIN 8
+#define FALL_THRESHOLD 25000  // Adjust sensitivity
+
+MPU6050 mpu(Wire);
+TinyGPSPlus gps;
+SoftwareSerial gsmSerial(2, 3); // RX, TX for GSM
+
+void setup() {
+  Serial.begin(9600);
+  gsmSerial.begin(9600);
+  Wire.begin();
+  mpu.begin();
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // Wait for sensors to stabilize
+  delay(1000);
+  mpu.calcOffsets();
+  
+  Serial.println("System Ready");
+}
+
+void loop() {
+  // Read MPU6050 data
+  mpu.update();
+
+  // Calculate magnitude of acceleration vector (g-force squared)
+  float ax = mpu.getAccX();
+  float ay = mpu.getAccY();
+  float az = mpu.getAccZ();
+
+  float magnitude = ax*ax + ay*ay + az*az;
+
+  // Check fall detection
+  if (magnitude > FALL_THRESHOLD) {
+    Serial.println("Fall detected!");
+    alertFall();
+    delay(10000);  // Wait 10 seconds before next check to avoid multiple alerts
+  }
+
+  // Read GPS data
+  while (Serial.available() > 0) {
+    gps.encode(Serial.read());
+  }
+}
+
+void alertFall() {
+  tone(BUZZER_PIN, 1000); // Beep buzzer
+  delay(3000);
+  noTone(BUZZER_PIN);
+
+  if (gps.location.isValid()) {
+    float lat = gps.location.lat();
+    float lng = gps.location.lng();
+
+    String message = "Fall detected! Location: https://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
+
+    sendSMS(message);
+  } else {
+    sendSMS("Fall detected! Location unavailable.");
+  }
+}
+
+void sendSMS(String msg) {
+  gsmSerial.println("AT");
+  delay(1000);
+  gsmSerial.println("AT+CMGF=1");    // SMS text mode
+  delay(1000);
+  gsmSerial.println("AT+CMGS=\"+1234567890\"");  // Replace with caregiver number
+  delay(1000);
+  gsmSerial.println(msg);
+  delay(500);
+  gsmSerial.write(26); // CTRL+Z to send
+  delay(5000);
+  Serial.println("SMS sent: " + msg);
+}
