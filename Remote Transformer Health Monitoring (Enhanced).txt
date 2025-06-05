@@ -1,0 +1,163 @@
+cpp
+CopyEdit
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+________________________________________
+Code: Multi-Sensor Fusion + Cloud Push + Relay Control
+cpp
+CopyEdit
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// WiFi Credentials
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// ThingSpeak Settings
+const char* thingSpeakApiKey = "YOUR_THINGSPEAK_WRITE_API_KEY";
+const char* thingSpeakServer = "http://api.thingspeak.com/update";
+
+// Sensor & Relay Pins
+#define ONE_WIRE_BUS 4       // DS18B20 data pin
+#define TRIG_PIN 12         // HC-SR04 trig
+#define ECHO_PIN 14         // HC-SR04 echo
+#define RELAY_PIN 26        // Relay controlling transformer cutoff
+#define RELAY_ALERT_PIN 27  // Relay controlling alarm or backup system
+
+// Initialize sensors
+Adafruit_INA219 ina219;
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature tempSensor(&oneWire);
+
+WiFiClient client;
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize INA219
+  if (!ina219.begin()) {
+    Serial.println("Failed to find INA219 chip");
+    while (1);
+  }
+
+  // Initialize DS18B20
+  tempSensor.begin();
+
+  // Setup HC-SR04 pins
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Setup relay pins
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RELAY_ALERT_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);        // Start with relay off (no fault)
+  digitalWrite(RELAY_ALERT_PIN, LOW);  // Alarm off
+
+  connectWiFi();
+  Serial.println("System ready.");
+}
+
+void loop() {
+  // Read all sensors
+  float voltage = ina219.getBusVoltage_V();
+  float current = ina219.getCurrent_mA() / 1000.0;  // convert mA to A
+  float power = ina219.getPower_mW() / 1000.0;      // convert mW to W
+
+  tempSensor.requestTemperatures();
+  float temperature = tempSensor.getTempCByIndex(0);
+
+  float distance = readUltrasonicDistance();
+
+  Serial.printf("Voltage: %.2f V, Current: %.2f A, Power: %.2f W, Temp: %.2f °C, Distance: %.2f cm\n",
+                voltage, current, power, temperature, distance);
+
+  // Fault detection logic
+  bool faultDetected = false;
+
+  // Example thresholds - tune these to your transformer specs
+  if (voltage < 200.0 || voltage > 250.0) faultDetected = true;
+  if (current > 30.0) faultDetected = true;
+  if (temperature > 80.0) faultDetected = true;       // High temp threshold
+  if (distance < 10.0) faultDetected = true;          // Ultrasonic detects abnormal proximity (e.g., object too close or vibration)
+
+  // Relay control based on fault detection
+  if (faultDetected) {
+    digitalWrite(RELAY_PIN, HIGH);       // Cut off transformer
+    digitalWrite(RELAY_ALERT_PIN, HIGH); // Trigger alarm
+    Serial.println("FAULT DETECTED - relays activated!");
+  } else {
+    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(RELAY_ALERT_PIN, LOW);
+    Serial.println("System normal.");
+  }
+
+  // Push data to ThingSpeak
+  sendToThingSpeak(voltage, current, power, temperature, distance);
+
+  delay(15000); // Loop every 15 seconds
+}
+
+float readUltrasonicDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  float distanceCm = (duration * 0.0343) / 2;
+  return distanceCm;
+}
+
+void connectWiFi() {
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Connected.");
+  } else {
+    Serial.println("Failed to connect.");
+  }
+}
+
+void sendToThingSpeak(float voltage, float current, float power, float temp, float distance) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+
+    String url = String(thingSpeakServer) + "?api_key=" + thingSpeakApiKey +
+                 "&field1=" + String(voltage) +
+                 "&field2=" + String(current) +
+                 "&field3=" + String(power) +
+                 "&field4=" + String(temp) +
+                 "&field5=" + String(distance);
+
+    http.begin(url);
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode > 0) {
+      Serial.printf("ThingSpeak updated successfully: %d\n", httpResponseCode);
+    } else {
+      Serial.printf("ThingSpeak update failed: %d\n", httpResponseCode);
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi disconnected, reconnecting...");
+    connectWiFi();
+  }
+}
