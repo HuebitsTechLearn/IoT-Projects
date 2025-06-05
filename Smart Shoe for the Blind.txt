@@ -1,0 +1,122 @@
+cpp
+CopyEdit
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+WiFi + Twilio Config
+cpp
+CopyEdit
+// WiFi Credentials
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Twilio Config
+String accountSID = "YOUR_TWILIO_ACCOUNT_SID";
+String authToken = "YOUR_TWILIO_AUTH_TOKEN";
+String twilioNumber = "whatsapp:+YOUR_TWILIO_NUMBER";
+String destinationNumber = "whatsapp:+DESTINATION_NUMBER";
+
+Setup GPS + DS18B20
+cpp
+CopyEdit
+// GPS
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);  // Use Serial1
+
+// DS18B20 Temperature Sensor
+#define ONE_WIRE_BUS 4
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+________________________________________
+Ultrasonic Sensor + Buzzer
+cpp
+CopyEdit
+#define TRIG_PIN 12
+#define ECHO_PIN 14
+#define BUZZER_PIN 13
+________________________________________
+Core Logic
+cpp
+CopyEdit
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17); // RX=16, TX=17
+  sensors.begin();
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting...");
+  }
+
+  Serial.println("WiFi Connected!");
+}
+
+float measureDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  return duration * 0.034 / 2;
+}
+
+void sendAlert(String message) {
+  HTTPClient http;
+  String url = "https://api.twilio.com/2010-04-01/Accounts/" + accountSID + "/Messages.json";
+  
+  String body = "To=" + destinationNumber + "&From=" + twilioNumber + "&Body=" + message;
+  
+  http.begin(url);
+  http.setAuthorization(accountSID.c_str(), authToken.c_str());
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  
+  int httpResponseCode = http.POST(body);
+  Serial.print("Twilio Response: ");
+  Serial.println(httpResponseCode);
+  
+  http.end();
+}
+________________________________________
+Main Loop: Alert Logic
+cpp
+CopyEdit
+void loop() {
+  sensors.requestTemperatures();
+  float temperature = sensors.getTempCByIndex(0);
+
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  float distance = measureDistance();
+
+  if (distance < 50.0) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+
+    if (gps.location.isValid()) {
+      String alertMsg = " Obstacle detected!\nLocation: https://maps.google.com/?q=" + 
+                         String(gps.location.lat(), 6) + "," + 
+                         String(gps.location.lng(), 6) + 
+                         "\nTemp: " + String(temperature, 1) + "°C";
+
+      sendAlert(alertMsg);
+      delay(10000); // Avoid spamming
+    }
+  } else {
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  delay(500);
+}
