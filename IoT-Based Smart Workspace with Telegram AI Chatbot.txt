@@ -1,0 +1,127 @@
+bash
+CopyEdit
+smart_workspace_bot/
+├── bot_config.py             # API tokens & GPIO mappings
+├── hardware_control.py       # GPIO interactions
+├── telegram_bot.py           # Main bot logic
+├── sensor_utils.py           # Sensor reading functions
+├── requirements.txt          # Dependencies
+________________________________________
+bot_config.py
+python
+CopyEdit
+# bot_config.py
+
+# Telegram Bot Token from BotFather
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+
+# GPIO Pin Configuration
+PIR_SENSOR_PIN = 17
+DHT_PIN = 4
+LIGHT_RELAY_PIN = 23
+FAN_RELAY_PIN = 24
+ALARM_RELAY_PIN = 25
+________________________________________
+sensor_utils.py
+python
+CopyEdit
+# sensor_utils.py
+import Adafruit_DHT
+import RPi.GPIO as GPIO
+from bot_config import PIR_SENSOR_PIN, DHT_PIN
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(PIR_SENSOR_PIN, GPIO.IN)
+
+def read_motion():
+    return GPIO.input(PIR_SENSOR_PIN)
+
+def read_dht():
+    humidity, temperature = Adafruit_DHT.read(Adafruit_DHT.DHT11, DHT_PIN)
+    return temperature, humidity
+________________________________________
+hardware_control.py
+python
+CopyEdit
+# hardware_control.py
+import RPi.GPIO as GPIO
+from bot_config import LIGHT_RELAY_PIN, FAN_RELAY_PIN, ALARM_RELAY_PIN
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(LIGHT_RELAY_PIN, GPIO.OUT)
+GPIO.setup(FAN_RELAY_PIN, GPIO.OUT)
+GPIO.setup(ALARM_RELAY_PIN, GPIO.OUT)
+
+def turn_on(device):
+    pin = get_pin(device)
+    if pin:
+        GPIO.output(pin, GPIO.HIGH)
+
+def turn_off(device):
+    pin = get_pin(device)
+    if pin:
+        GPIO.output(pin, GPIO.LOW)
+
+def get_pin(device):
+    mapping = {
+        "light": LIGHT_RELAY_PIN,
+        "fan": FAN_RELAY_PIN,
+        "alarm": ALARM_RELAY_PIN
+    }
+    return mapping.get(device.lower())
+________________________________________
+telegram_bot.py
+python
+CopyEdit
+# telegram_bot.py
+from telegram.ext import Updater, CommandHandler
+from bot_config import BOT_TOKEN
+from sensor_utils import read_dht, read_motion
+from hardware_control import turn_on, turn_off
+
+def start(update, context):
+    update.message.reply_text("🔌 Welcome to Smart Workspace Bot. Use /status or /on light")
+
+def status(update, context):
+    temp, hum = read_dht()
+    motion = read_motion()
+    update.message.reply_text(
+        f" Temp: {temp:.1f}°C\n Humidity: {hum:.1f}%\n👀 Motion Detected: {'Yes' if motion else 'No'}"
+    )
+
+def on(update, context):
+    if len(context.args) == 0:
+        update.message.reply_text("Usage: /on [light|fan|alarm]")
+        return
+    device = context.args[0]
+    turn_on(device)
+    update.message.reply_text(f" {device.capitalize()} turned ON.")
+
+def off(update, context):
+    if len(context.args) == 0:
+        update.message.reply_text("Usage: /off [light|fan|alarm]")
+        return
+    device = context.args[0]
+    turn_off(device)
+    update.message.reply_text(f" {device.capitalize()} turned OFF.")
+
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("status", status))
+    dp.add_handler(CommandHandler("on", on))
+    dp.add_handler(CommandHandler("off", off))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
+
+requirements.txt
+CopyEdit
+python-telegram-bot==13.15
+Adafruit_DHT
+RPi.GPIO
