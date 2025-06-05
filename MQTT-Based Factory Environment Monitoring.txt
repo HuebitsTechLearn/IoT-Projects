@@ -1,0 +1,63 @@
+Python Code
+python
+CopyEdit
+import paho.mqtt.client as mqtt
+import Adafruit_DHT
+import time
+import RPi.GPIO as GPIO
+
+# Sensor setup
+DHT_SENSOR = Adafruit_DHT.DHT22
+DHT_PIN = 4  # GPIO pin for DHT22
+GAS_PIN = 17  # GPIO pin for MQ2 analog output (use ADC like MCP3008 if needed)
+BUZZER = 27
+
+# GPIO setup
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(GAS_PIN, GPIO.IN)
+GPIO.setup(BUZZER, GPIO.OUT)
+
+# MQTT Setup
+channelID = "YOUR_CHANNEL_ID"
+mqttHost = "mqtt3.thingspeak.com"
+writeAPIKey = "YOUR_WRITE_API_KEY"
+clientID = "FactoryMonitorPi"
+username = "apikey"
+password = writeAPIKey
+
+topic = "channels/" + channelID + "/publish/" + writeAPIKey
+
+client = mqtt.Client(client_id=clientID)
+client.username_pw_set(username, password)
+client.connect(mqttHost, 1883, 60)
+
+def send_alert(temp, hum, gas_status):
+    GPIO.output(BUZZER, GPIO.HIGH)
+    print(" ALERT! Unsafe condition detected!")
+    time.sleep(2)
+    GPIO.output(BUZZER, GPIO.LOW)
+
+def read_sensors():
+    humidity, temperature = Adafruit_DHT.read_retry(DHT_SENSOR, DHT_PIN)
+    gas_detected = GPIO.input(GAS_PIN) == GPIO.LOW  # Active LOW MQ2
+    return temperature, humidity, gas_detected
+
+try:
+    while True:
+        temp, hum, gas = read_sensors()
+
+        if temp is not None and hum is not None:
+            payload = f"field1={temp:.2f}&field2={hum:.2f}&field3={int(gas)}"
+            client.publish(topic, payload)
+            print(f"Published -> Temp: {temp:.1f}C  Humidity: {hum:.1f}%  Gas: {'Yes' if gas else 'No'}")
+            
+            # Trigger alert if thresholds exceeded
+            if temp > 40 or hum > 80 or gas:
+                send_alert(temp, hum, gas)
+        else:
+            print("Sensor error!")
+
+        time.sleep(15)  # 15 seconds interval
+except KeyboardInterrupt:
+    print("Monitoring stopped by user.")
+    GPIO.cleanup()
