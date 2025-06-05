@@ -1,0 +1,132 @@
+Libraries to Install
+•	PZEM004Tv30
+•	WiFi.h
+•	BlynkSimpleEsp32.h
+•	LiquidCrystal_I2C.h
+•	HardwareSerial.h (built-in)
+________________________________________
+Full Code
+cpp
+CopyEdit
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <PZEM004Tv30.h>
+#include <LiquidCrystal_I2C.h>
+
+// Replace these with your actual info
+char auth[] = "YOUR_BLYNK_AUTH_TOKEN";
+char ssid[] = "YOUR_WIFI_SSID";
+char pass[] = "YOUR_WIFI_PASSWORD";
+
+// PZEM-004T pins for UART2 on ESP32
+#define PZEM_RX 16
+#define PZEM_TX 17
+
+// GSM pins for UART1
+#define GSM_RX 4
+#define GSM_TX 5
+
+// Alarm buzzer pin
+#define BUZZER_PIN 27
+
+HardwareSerial pzemSerial(2); // UART2 for PZEM
+HardwareSerial gsmSerial(1);  // UART1 for GSM
+
+PZEM004Tv30 pzem(&pzemSerial);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+BlynkTimer timer;
+
+// Thresholds for alerts
+const float voltageThreshold = 230.0; // example
+const float powerThreshold = 2000.0;  // Watts
+
+// SMS function prototype
+void sendSMS(const char *message);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Start UARTs
+  pzemSerial.begin(9600, SERIAL_8N1, PZEM_RX, PZEM_TX);
+  gsmSerial.begin(9600, SERIAL_8N1, GSM_RX, GSM_TX);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+
+  // Connect WiFi and Blynk
+  Blynk.begin(auth, ssid, pass);
+
+  // Initial display
+  lcd.setCursor(0,0);
+  lcd.print("Energy Monitor");
+  lcd.setCursor(0,1);
+  lcd.print("Starting...");
+
+  delay(2000);
+  lcd.clear();
+
+  // Set repeating timer to read sensor and update
+  timer.setInterval(15000L, readAndUpdate); // every 15 sec
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+}
+
+void readAndUpdate() {
+  float voltage = pzem.voltage();
+  float current = pzem.current();
+  float power = pzem.power();
+
+  if (isnan(voltage) || isnan(current) || isnan(power)) {
+    Serial.println("Sensor read failed");
+    lcd.clear();
+    lcd.print("Sensor Error");
+    return;
+  }
+
+  // Debug prints
+  Serial.printf("Voltage: %.2f V, Current: %.3f A, Power: %.2f W\n", voltage, current, power);
+
+  // Update LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.printf("V:%.1f I:%.2f", voltage, current);
+  lcd.setCursor(0, 1);
+  lcd.printf("P:%.1f W", power);
+
+  // Update Blynk virtual pins
+  Blynk.virtualWrite(V1, voltage);
+  Blynk.virtualWrite(V2, current);
+  Blynk.virtualWrite(V3, power);
+
+  // Alert logic
+  if (voltage > voltageThreshold || power > powerThreshold) {
+    Serial.println("ALERT! Threshold exceeded");
+    digitalWrite(BUZZER_PIN, HIGH);
+    sendSMS(" Energy Alert: Threshold exceeded!");
+  } else {
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+// Send SMS via GSM module
+void sendSMS(const char *message) {
+  gsmSerial.println("AT");
+  delay(100);
+  gsmSerial.println("AT+CMGF=1");  // SMS text mode
+  delay(100);
+  gsmSerial.println("AT+CMGS=\"+1234567890\"");  // Replace with your phone number
+  delay(100);
+  gsmSerial.print(message);
+  delay(100);
+  gsmSerial.write(26); // CTRL+Z to send
+  delay(5000);
+  Serial.println("SMS sent.");
+}
